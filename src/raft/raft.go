@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"labrpc"
 	"math/rand"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,7 +54,7 @@ type ApplyMsg struct {
 }
 
 type LogEntry struct {
-	term    int
+	Term    int
 	Command interface{}
 }
 
@@ -83,6 +84,8 @@ type Raft struct {
 	exitNotify      chan struct{}
 	heartBeatNotify chan struct{}
 	voteNotify      chan struct{}
+
+	applyCh chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -184,7 +187,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	lastLogTerm := -1
 	lastLogIndex := -1
 	if len(rf.log) != 0 {
-		lastLogTerm = rf.log[len(rf.log)-1].term
+		lastLogTerm = rf.log[len(rf.log)-1].Term
 		lastLogIndex = len(rf.log) - 1
 	}
 	term := rf.currentTerm
@@ -233,12 +236,6 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 	defer rf.mu.Unlock()
 
 	rf.logger(fmt.Sprintf("receives from %v server handle heartbeat rpc", args.LeaderId))
-	// lastLogTerm := -1
-	// lastLogIndex := -1
-	// if len(rf.log) != 0 {
-	// 	lastLogTerm = rf.log[len(rf.log)-1].term
-	// 	lastLogIndex = len(rf.log) - 1
-	// }
 
 	if args.Term > rf.currentTerm {
 		rf.role = FOLLOWER
@@ -250,45 +247,136 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 		return
 	}
 
-	rf.currentTerm = args.Term
-	reply.Success = true
 	rf.logger("send heartBeatNotify to itself")
 	rf.heartBeatNotify <- struct{}{}
 
+	rf.currentTerm = args.Term
+	reply.Success = true
+
+	prevLogTerm := -1
+	if args.PrevLogIndex != -1 && args.PrevLogIndex <= len(rf.log)-1 {
+		prevLogTerm = rf.log[args.PrevLogIndex].Term
+	}
+
+	if args.PrevLogIndex > len(rf.log)-1 || prevLogTerm != args.PrevLogTerm {
+		rf.logger("handle heartbeat return false")
+		reply.Success = false
+		return
+	}
+
+	currentIndex := args.PrevLogIndex + 1
+
+	for _, logEntry := range args.Entries {
+		if currentIndex >= len(rf.log) {
+			rf.log = append(rf.log, logEntry)
+		} else {
+			rf.log[currentIndex] = logEntry
+		}
+		currentIndex++
+	}
+
+	if args.LeaderCommit > rf.commitIndex {
+		rf.commitIndex = args.LeaderCommit
+		if len(rf.log)-1 < rf.commitIndex {
+			rf.commitIndex = len(rf.log) - 1
+		}
+		rf.updateAppliedIndex()
+	}
 }
 
-//sendHeartBeat
+func (rf *Raft) sendHeartBeatTo(server int) {
+	for {
+		log := make([]LogEntry, 0)
+		prevLogIndex := -1
+		prevLogTerm := -1
+		rf.mu.Lock()
+		rf.logger(fmt.Sprintf("nextIndex[%v] : %v", server, rf.nextIndex[server]))
+		if rf.nextIndex[server] != 0 {
+			rf.logger(fmt.Sprintf("nextIndex[%v] : %v", server, rf.nextIndex[server]))
+			prevLogIndex = rf.nextIndex[server] - 1
+			prevLogTerm = rf.log[prevLogIndex].Term
+		}
+		log = append(log, rf.log[prevLogIndex+1:]...)
+		rf.mu.Unlock()
 
-func (rf *Raft) sendHeartBeatTo(server int, args HeartBeatArgs, log []LogEntry) {
-	reply := &HeartBeatReply{}
-	ok := rf.sendHeartBeat(server, &args, reply)
-	if ok {
+		args := &HeartBeatArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: prevLogIndex,
+			PrevLogTerm:  prevLogTerm,
+			Entries:      log,
+			LeaderCommit: rf.commitIndex,
+		}
+		reply := &HeartBeatReply{}
+		ok := rf.sendHeartBeat(server, args, reply)
+
+		if !ok {
+			return
+		}
+
 		if reply.Term > args.Term {
 			rf.logger("heartbeat reply's term is bigger than currentTerm, be follower")
 			rf.beFollower(reply.Term)
+			return
+		}
+
+		if !reply.Success {
+			rf.mu.Lock()
+			rf.logger(fmt.Sprintf("receives heartbeat reply from %v fail, rf.nextIndex[server] : %v", server, rf.nextIndex[server]))
+			rf.nextIndex[server]--
+			rf.mu.Unlock()
+		} else {
+			rf.mu.Lock()
+			if rf.matchIndex[server] < args.PrevLogIndex+len(log) {
+				rf.logger(fmt.Sprintf("update matchIndex[%v] from %v to %v", server, rf.matchIndex[server], len(log)-1))
+				rf.matchIndex[server] = args.PrevLogIndex + len(log)
+				rf.updateCommitIndex()
+				rf.updateAppliedIndex()
+			}
+
+			if rf.nextIndex[server] < rf.matchIndex[server]+1 {
+				rf.logger(fmt.Sprintf("update nextIndex[%v] from %v to %v", server, rf.nextIndex[server], rf.matchIndex[server]+1))
+				rf.nextIndex[server] = rf.matchIndex[server] + 1
+			}
+			rf.mu.Unlock()
+			return
 		}
 	}
 }
 
-func (rf *Raft) broadcast() {
-	rf.mu.Lock()
-	lastLogIndex := -1
-	lastLogTerm := -1
-	args := HeartBeatArgs{
-		Term:         rf.currentTerm,
-		PrevLogIndex: lastLogIndex,
-		PrevLogTerm:  lastLogTerm,
-		LeaderId:     rf.me,
-		LeaderCommit: rf.commitIndex,
+func (rf *Raft) updateCommitIndex() {
+	matchIndex := make([]int, len(rf.matchIndex))
+	copy(matchIndex, rf.matchIndex)
+	matchIndex[rf.me] = len(rf.log) - 1
+	sort.Sort(sort.Reverse(sort.IntSlice(matchIndex)))
+	N := matchIndex[len(matchIndex)/2]
+	rf.logger(fmt.Sprintf("try to update commit index from %v to %v", rf.commitIndex, N))
+	if N > rf.commitIndex && rf.log[N].Term == rf.currentTerm {
+		rf.logger(fmt.Sprintf("updateCommitIndex from %v to %v", rf.commitIndex, N))
+		rf.commitIndex = N
+		rf.updateAppliedIndex()
 	}
-	log := make([]LogEntry, len(rf.log))
-	copy(log, rf.log)
+}
+
+func (rf *Raft) updateAppliedIndex() {
+	rf.logger(fmt.Sprintf("updateAppliedIndex from %v to %v", rf.lastApplied, rf.commitIndex))
+	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+		applyMsg := ApplyMsg{
+			CommandValid: true,
+			Command:      rf.log[i].Command,
+			CommandIndex: i + 1,
+		}
+		rf.applyCh <- applyMsg
+	}
+	rf.lastApplied = rf.commitIndex
+}
+
+func (rf *Raft) broadcast() {
 	rf.logger("broadcast")
-	rf.mu.Unlock()
 
 	for i := 0; i < rf.serverNum; i++ {
 		if i != rf.me {
-			go rf.sendHeartBeatTo(i, args, log)
+			go rf.sendHeartBeatTo(i)
 		}
 	}
 }
@@ -330,7 +418,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 func (rf *Raft) sendHeartBeat(server int, args *HeartBeatArgs, reply *HeartBeatReply) bool {
 
-	rf.logger(fmt.Sprintf("send to %v server heart beat", server))
+	rf.logger(fmt.Sprintf("send to %v server heart beat with prevLogTerm : %v, prevLogIndex : %v", server, args.PrevLogTerm, args.PrevLogIndex))
 	ok := rf.peers[server].Call("Raft.HandleHeartBeat", args, reply)
 	return ok
 }
@@ -355,8 +443,22 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	isLeader = (rf.role == LEADER)
+	if !isLeader {
+		return index, term, isLeader
+	}
+	term = rf.currentTerm
+	index = len(rf.log)
+	rf.log = append(rf.log, LogEntry{
+		Term:    term,
+		Command: command,
+	})
+	rf.logger(fmt.Sprintf("leader start append a new log, len : %v", len(rf.log)))
+	rf.broadcast()
 
-	return index, term, isLeader
+	return index + 1, term, isLeader
 }
 
 //
@@ -395,8 +497,13 @@ func (rf *Raft) beLeader() {
 	rf.mu.Lock()
 	rf.role = LEADER
 	rf.logger("be leader")
-	rf.nextIndex = make([]int, rf.serverNum)
-	rf.matchIndex = make([]int, rf.serverNum)
+	rf.nextIndex = make([]int, 0)
+	rf.matchIndex = make([]int, 0)
+	for i := 0; i < rf.serverNum; i++ {
+		rf.nextIndex = append(rf.nextIndex, len(rf.log))
+		rf.matchIndex = append(rf.matchIndex, -1)
+	}
+
 	rf.mu.Unlock()
 }
 
@@ -417,7 +524,7 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 	term := -1
 	if len(rf.log) != 0 {
-		term = rf.log[len(rf.log)-1].term
+		term = rf.log[len(rf.log)-1].Term
 	}
 	requestVoteArgs := &RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -470,11 +577,6 @@ func (rf *Raft) startElection() {
 
 			}
 		}
-		// if v > rf.serverNum/2 {
-		// 	rf.beLeader()
-		// 	rf.heartBeatNotify <- struct{}{}
-		// 	rf.broadcast()
-		// }
 	}()
 }
 
@@ -507,7 +609,6 @@ func (rf *Raft) working() {
 			case <-rf.heartBeatNotify:
 				rf.logger("receives heart beat notify")
 			case <-time.After(time.Duration(timeOut) * time.Millisecond):
-
 				rf.startElection()
 			}
 		case LEADER:
@@ -547,6 +648,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.heartBeatNotify = make(chan struct{}, 3)
 	rf.voteNotify = make(chan struct{}, 3)
 
+	rf.applyCh = applyCh
+
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
@@ -570,6 +673,6 @@ func (rf *Raft) logger(content string) {
 	if rf.role == CANDIDATE {
 		role = "candidate"
 	}
-	fmt.Printf("%v server role(%v),term(%v) : %v\n", rf.me, role, rf.currentTerm, content)
+	fmt.Printf("%v server role(%v),term(%v),lastApplied(%v),commitIndex(%v),lenLog(%v): %v\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, len(rf.log), content)
 
 }
