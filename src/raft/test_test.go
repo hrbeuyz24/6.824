@@ -582,30 +582,51 @@ func TestPersist22C(t *testing.T) {
 
 		leader1 := cfg.checkOneLeader()
 
+		fmt.Printf("DEBUG : disconnect %v server\n", (leader1+1)%servers)
 		cfg.disconnect((leader1 + 1) % servers)
+
+		fmt.Printf("DEBUG : disconnect %v server\n", (leader1+2)%servers)
 		cfg.disconnect((leader1 + 2) % servers)
 
 		cfg.one(10+index, servers-2, true)
 		index++
 
+		fmt.Printf("DEBUG : disconnect %v server\n", (leader1+0)%servers)
 		cfg.disconnect((leader1 + 0) % servers)
+
+		fmt.Printf("DEBUG : disconnect %v server\n", (leader1+3)%servers)
 		cfg.disconnect((leader1 + 3) % servers)
+
+		fmt.Printf("DEBUG : disconnect %v server\n", (leader1+4)%servers)
 		cfg.disconnect((leader1 + 4) % servers)
 
+		fmt.Printf("DEBUG : restart %v server\n", (leader1+1)%servers)
 		cfg.start1((leader1 + 1) % servers)
+
+		fmt.Printf("DEBUG : restart %v server\n", (leader1+2)%servers)
 		cfg.start1((leader1 + 2) % servers)
+
+		fmt.Printf("DEBUG : connect %v server\n", (leader1+1)%servers)
 		cfg.connect((leader1 + 1) % servers)
+
+		fmt.Printf("DEBUG : connect %v server\n", (leader1+2)%servers)
 		cfg.connect((leader1 + 2) % servers)
 
 		time.Sleep(RaftElectionTimeout)
 
+		fmt.Printf("DEBUG : restart %v server\n", (leader1+3)%servers)
 		cfg.start1((leader1 + 3) % servers)
+
+		fmt.Printf("DEBUG : connect %v server\n", (leader1+3)%servers)
 		cfg.connect((leader1 + 3) % servers)
 
 		cfg.one(10+index, servers-2, true)
 		index++
 
+		fmt.Printf("DEBUG : connect %v server\n", (leader1+4)%servers)
 		cfg.connect((leader1 + 4) % servers)
+
+		fmt.Printf("DEBUG : connect %v server\n", (leader1+0)%servers)
 		cfg.connect((leader1 + 0) % servers)
 	}
 
@@ -684,6 +705,7 @@ func TestFigure82C(t *testing.T) {
 		}
 
 		if leader != -1 {
+			fmt.Printf("DEBUG : kill leader %v server\n", leader)
 			cfg.crash1(leader)
 			nup -= 1
 		}
@@ -691,8 +713,12 @@ func TestFigure82C(t *testing.T) {
 		if nup < 3 {
 			s := rand.Int() % servers
 			if cfg.rafts[s] == nil {
+				fmt.Printf("DEBUG : restart %v server\n", s)
 				cfg.start1(s)
+
+				fmt.Printf("DEBUG : connect %v server\n", s)
 				cfg.connect(s)
+
 				nup += 1
 			}
 		}
@@ -700,7 +726,11 @@ func TestFigure82C(t *testing.T) {
 
 	for i := 0; i < servers; i++ {
 		if cfg.rafts[i] == nil {
+
+			fmt.Printf("DEBUG : restart %v server\n", i)
 			cfg.start1(i)
+
+			fmt.Printf("DEBUG : connect %v server\n", i)
 			cfg.connect(i)
 		}
 	}
@@ -770,6 +800,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		}
 
 		if leader != -1 && (rand.Int()%1000) < int(RaftElectionTimeout/time.Millisecond)/2 {
+			fmt.Printf("DEBUG : disconnect %v server\n", leader)
 			cfg.disconnect(leader)
 			nup -= 1
 		}
@@ -777,6 +808,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		if nup < 3 {
 			s := rand.Int() % servers
 			if cfg.connected[s] == false {
+				fmt.Printf("DEBUG : connect %v server\n", s)
 				cfg.connect(s)
 				nup += 1
 			}

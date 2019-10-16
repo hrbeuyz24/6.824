@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"bytes"
 	"fmt"
 	"labrpc"
 	"math/rand"
@@ -25,6 +26,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/6.824/src/labgob"
 )
 
 // import "bytes"
@@ -78,8 +81,10 @@ type Raft struct {
 	lastApplied int
 	role        int
 
-	nextIndex  []int
-	matchIndex []int
+	nextIndex         []int
+	matchIndex        []int
+	lastIncludedIndex int
+	lastIncludedTerm  int
 
 	exitNotify      chan struct{}
 	heartBeatNotify chan struct{}
@@ -96,9 +101,9 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (2A).
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	term = rf.currentTerm
 	isleader = rf.role == LEADER
-	rf.mu.Unlock()
 	return term, isleader
 }
 
@@ -116,6 +121,17 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+	currentTerm := rf.currentTerm
+	isVoted := rf.isVoted
+	log := rf.log
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(currentTerm)
+	e.Encode(isVoted)
+	e.Encode(log)
+
+	rf.persister.SaveRaftState(w.Bytes())
 }
 
 //
@@ -138,6 +154,20 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var isVoted map[int]bool
+	var log []LogEntry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&isVoted) != nil ||
+		d.Decode(&log) != nil {
+		panic("read persist failed")
+	} else {
+		rf.currentTerm = currentTerm
+		rf.isVoted = isVoted
+		rf.log = log
+	}
 }
 
 //
@@ -174,6 +204,26 @@ type HeartBeatArgs struct {
 type HeartBeatReply struct {
 	Term    int
 	Success bool
+}
+
+type InstallSnapshotArgs struct {
+	Term              int
+	LeaderId          int
+	lastIncludedIndex int
+	lastIncludedTerm  int
+	data              []byte
+}
+
+type InstallSnapshotReply struct {
+	term int
+}
+
+func (rf *Raft) send(ch chan struct{}) {
+	select {
+	case <-ch:
+	default:
+	}
+	ch <- struct{}{}
 }
 
 //
@@ -213,21 +263,25 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	if lastLogTerm > args.Term {
+	if lastLogTerm > args.LastLogTerm {
 		reply.VoteGranted = false
 		return
 	}
 
-	if lastLogTerm == args.Term && lastLogIndex > args.LastLogIndex {
+	rf.logger(fmt.Sprintf("receives vote request rf.lastLogTerm : %v, args.lastLogTerm : %v, rf.lastLogIndex : %v, args.lastLogIndex : %v", lastLogTerm, args.LastLogTerm, lastLogIndex, args.LastLogIndex))
+
+	if lastLogTerm == args.LastLogTerm && lastLogIndex > args.LastLogIndex {
 		reply.VoteGranted = false
 		return
 	}
 
 	rf.mu.Lock()
-	rf.voteNotify <- struct{}{}
+	defer rf.mu.Unlock()
+	rf.send(rf.voteNotify)
+	//rf.voteNotify <- struct{}{}
+
 	rf.logger(fmt.Sprintf("votes for %v server", args.CandidateId))
 	rf.isVoted[args.Term] = true
-	rf.mu.Unlock()
 }
 
 func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
@@ -239,6 +293,7 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 
 	if args.Term > rf.currentTerm {
 		rf.role = FOLLOWER
+		rf.logger("turn to follower")
 	}
 
 	if rf.currentTerm > args.Term {
@@ -248,7 +303,8 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 	}
 
 	rf.logger("send heartBeatNotify to itself")
-	rf.heartBeatNotify <- struct{}{}
+	rf.send(rf.heartBeatNotify)
+	//rf.heartBeatNotify <- struct{}{}
 
 	rf.currentTerm = args.Term
 	reply.Success = true
@@ -282,17 +338,29 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 		}
 		rf.updateAppliedIndex()
 	}
+	if len(rf.log) != 0 {
+		rf.logger(fmt.Sprintf("after append new log with lastLogTerm : %v, lastLogIndex : %v", rf.log[len(rf.log)-1].Term, len(rf.log)-1))
+	}
+	rf.persist()
 }
 
 func (rf *Raft) sendHeartBeatTo(server int) {
 	for {
+
 		log := make([]LogEntry, 0)
 		prevLogIndex := -1
 		prevLogTerm := -1
 		rf.mu.Lock()
-		rf.logger(fmt.Sprintf("nextIndex[%v] : %v", server, rf.nextIndex[server]))
+		reply := &HeartBeatReply{}
+		reply.Success = false
+		reply.Term = rf.currentTerm
+		if rf.role != LEADER {
+			rf.mu.Unlock()
+			return
+		}
+		//rf.logger(fmt.Sprintf("nextIndex[%v] : %v", server, rf.nextIndex[server]))
 		if rf.nextIndex[server] != 0 {
-			rf.logger(fmt.Sprintf("nextIndex[%v] : %v", server, rf.nextIndex[server]))
+			//rf.logger(fmt.Sprintf("nextIndex[%v] : %v", server, rf.nextIndex[server]))
 			prevLogIndex = rf.nextIndex[server] - 1
 			prevLogTerm = rf.log[prevLogIndex].Term
 		}
@@ -307,7 +375,6 @@ func (rf *Raft) sendHeartBeatTo(server int) {
 			Entries:      log,
 			LeaderCommit: rf.commitIndex,
 		}
-		reply := &HeartBeatReply{}
 		ok := rf.sendHeartBeat(server, args, reply)
 
 		if !ok {
@@ -323,7 +390,7 @@ func (rf *Raft) sendHeartBeatTo(server int) {
 		if !reply.Success {
 			rf.mu.Lock()
 			rf.logger(fmt.Sprintf("receives heartbeat reply from %v fail, rf.nextIndex[server] : %v", server, rf.nextIndex[server]))
-			rf.nextIndex[server]--
+			rf.nextIndex[server] = args.PrevLogIndex - 1
 			rf.mu.Unlock()
 		} else {
 			rf.mu.Lock()
@@ -338,6 +405,7 @@ func (rf *Raft) sendHeartBeatTo(server int) {
 				rf.logger(fmt.Sprintf("update nextIndex[%v] from %v to %v", server, rf.nextIndex[server], rf.matchIndex[server]+1))
 				rf.nextIndex[server] = rf.matchIndex[server] + 1
 			}
+			rf.persist()
 			rf.mu.Unlock()
 			return
 		}
@@ -457,6 +525,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	})
 	rf.logger(fmt.Sprintf("leader start append a new log, len : %v", len(rf.log)))
 	rf.broadcast()
+	rf.persist()
 
 	return index + 1, term, isLeader
 }
@@ -469,6 +538,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+	rf.persist()
+	rf.send(rf.exitNotify)
+	//rf.exitNotify <- struct{}{}
 }
 
 func (rf *Raft) GetRole() int {
@@ -490,6 +562,7 @@ func (rf *Raft) beFollower(term int) {
 	rf.role = FOLLOWER
 	rf.currentTerm = term
 	rf.logger("be follower")
+	rf.persist()
 	rf.mu.Unlock()
 }
 
@@ -512,6 +585,7 @@ func (rf *Raft) beCandidate() {
 	rf.role = CANDIDATE
 	rf.logger("be candidate")
 	rf.currentTerm++
+	rf.persist()
 	rf.mu.Unlock()
 }
 
@@ -534,21 +608,25 @@ func (rf *Raft) startElection() {
 	}
 	currentTerm := rf.currentTerm
 	rf.mu.Unlock()
-	reply := &RequestVoteReply{}
 
 	go func() {
 		var v int32 = 0
+
+		rf.mu.Lock()
 		_, ok := rf.isVoted[currentTerm]
 		if !ok {
 			v++
+			rf.isVoted[currentTerm] = true
 		} else {
 			rf.logger(fmt.Sprintf("has voted for %v", currentTerm))
 		}
+		rf.mu.Unlock()
 
 		for i := 0; i < rf.serverNum; i++ {
 			if i != rf.me {
 
 				go func(i int) {
+					reply := &RequestVoteReply{}
 					ok := rf.sendRequestVote(i, requestVoteArgs, reply)
 					role := rf.GetRole()
 					term := rf.GetTerm()
@@ -559,10 +637,12 @@ func (rf *Raft) startElection() {
 						if reply.VoteGranted {
 							atomic.AddInt32(&v, 1)
 							tmp := atomic.LoadInt32(&v)
+							rf.logger(fmt.Sprintf("receive %v server's vote", i))
 							rf.logger(fmt.Sprintf("receive %v votes", tmp))
 							if tmp > int32(rf.serverNum/2) {
 								rf.beLeader()
-								rf.heartBeatNotify <- struct{}{}
+								rf.send(rf.heartBeatNotify)
+								//rf.heartBeatNotify <- struct{}{}
 								rf.broadcast()
 							}
 						} else {
@@ -590,7 +670,7 @@ func (rf *Raft) working() {
 		}
 
 		//r := rand.New(rand.NewSource(time.Now().UnixNano()))
-		timeOut := rand.Intn(250) + 150
+		timeOut := rand.Intn(200) + 150
 
 		role := rf.GetRole()
 		switch role {
@@ -598,6 +678,7 @@ func (rf *Raft) working() {
 			rf.logger("follower produce")
 			select {
 			case <-rf.voteNotify:
+				rf.logger("receives voteNotify notify")
 			case <-rf.heartBeatNotify:
 				rf.logger("receives heart beat notify")
 			case <-time.After(time.Duration(timeOut) * time.Millisecond):
@@ -608,12 +689,13 @@ func (rf *Raft) working() {
 			select {
 			case <-rf.heartBeatNotify:
 				rf.logger("receives heart beat notify")
+			case <-rf.voteNotify:
 			case <-time.After(time.Duration(timeOut) * time.Millisecond):
 				rf.startElection()
 			}
 		case LEADER:
 			rf.logger("leader produce")
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(40 * time.Millisecond)
 			rf.broadcast()
 		}
 	}
@@ -644,18 +726,24 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = -1
 	rf.log = make([]LogEntry, 0)
 
-	rf.exitNotify = make(chan struct{}, 3)
-	rf.heartBeatNotify = make(chan struct{}, 3)
-	rf.voteNotify = make(chan struct{}, 3)
+	rf.exitNotify = make(chan struct{}, 1)
+	rf.heartBeatNotify = make(chan struct{}, 1)
+	rf.voteNotify = make(chan struct{}, 1)
 
 	rf.applyCh = applyCh
+
+	rf.role = FOLLOWER
 
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	rf.beFollower(-1)
+	if len(rf.log) > 0 {
+		rf.logger(fmt.Sprintf("last log term : %v", rf.log[len(rf.log)-1].Term))
+	} else {
+		rf.logger("raft read persist")
+	}
 
 	go rf.working()
 
