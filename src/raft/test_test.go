@@ -802,6 +802,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		if leader != -1 && (rand.Int()%1000) < int(RaftElectionTimeout/time.Millisecond)/2 {
 			fmt.Printf("DEBUG : disconnect %v server\n", leader)
 			cfg.disconnect(leader)
+			cfg.debug(servers)
 			nup -= 1
 		}
 
@@ -810,16 +811,21 @@ func TestFigure8Unreliable2C(t *testing.T) {
 			if cfg.connected[s] == false {
 				fmt.Printf("DEBUG : connect %v server\n", s)
 				cfg.connect(s)
+				cfg.debug(servers)
 				nup += 1
 			}
 		}
 	}
 
+	fmt.Printf("DEBUG : break iters\n")
+
 	for i := 0; i < servers; i++ {
 		if cfg.connected[i] == false {
+			fmt.Printf("DEBUG : connect %v srever\n", i)
 			cfg.connect(i)
 		}
 	}
+	cfg.debug(servers)
 
 	cfg.one(rand.Int()%10000, servers, true)
 

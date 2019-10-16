@@ -202,8 +202,10 @@ type HeartBeatArgs struct {
 }
 
 type HeartBeatReply struct {
-	Term    int
-	Success bool
+	Term         int
+	Success      bool
+	NextIndex    int
+	ConflictTerm int
 }
 
 type InstallSnapshotArgs struct {
@@ -291,7 +293,7 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 
 	rf.logger(fmt.Sprintf("receives from %v server handle heartbeat rpc", args.LeaderId))
 
-	if args.Term > rf.currentTerm {
+	if args.Term >= rf.currentTerm {
 		rf.role = FOLLOWER
 		rf.logger("turn to follower")
 	}
@@ -315,27 +317,52 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 	}
 
 	if args.PrevLogIndex > len(rf.log)-1 || prevLogTerm != args.PrevLogTerm {
-		rf.logger("handle heartbeat return false")
+		rf.logger(fmt.Sprintf("handle heartbeat return false, args.PrevLogIndex : %v, args.PrevLogTerm : %v, rf term : %v", args.PrevLogIndex, args.PrevLogTerm, prevLogTerm))
+
+		reply.NextIndex = 0
+		if args.PrevLogIndex > len(rf.log)-1 {
+			reply.NextIndex = len(rf.log)
+		} else {
+			for i := 0; i < len(rf.log); i++ {
+				if rf.log[i].Term == prevLogTerm {
+					reply.NextIndex = i
+					break
+				}
+			}
+		}
+
+		// if args.PrevLogIndex > len(rf.log)-1 {
+		// 	reply.NextIndex = len(rf.log)
+		// 	reply.ConflictTerm = -1
+		// } else {
+		// 	reply.ConflictTerm = rf.log[args.PrevLogIndex].Term
+		// 	reply.NextIndex = 0
+		// }
+
 		reply.Success = false
 		return
 	}
 
 	currentIndex := args.PrevLogIndex + 1
 
-	for _, logEntry := range args.Entries {
-		if currentIndex >= len(rf.log) {
-			rf.log = append(rf.log, logEntry)
-		} else {
-			rf.log[currentIndex] = logEntry
-		}
-		currentIndex++
-	}
+	rf.log = append(rf.log[:currentIndex], args.Entries[:]...)
+
+	// for _, logEntry := range args.Entries {
+	// 	if currentIndex >= len(rf.log) {
+	// 		rf.log = append(rf.log, logEntry)
+	// 	} else {
+	// 		rf.log[currentIndex] = logEntry
+	// 	}
+	// 	currentIndex++
+	// }
 
 	if args.LeaderCommit > rf.commitIndex {
+		tmp := rf.commitIndex
 		rf.commitIndex = args.LeaderCommit
 		if len(rf.log)-1 < rf.commitIndex {
 			rf.commitIndex = len(rf.log) - 1
 		}
+		rf.logger(fmt.Sprintf("updateCommitIndex from %v to %v", tmp, rf.commitIndex))
 		rf.updateAppliedIndex()
 	}
 	if len(rf.log) != 0 {
@@ -390,7 +417,17 @@ func (rf *Raft) sendHeartBeatTo(server int) {
 		if !reply.Success {
 			rf.mu.Lock()
 			rf.logger(fmt.Sprintf("receives heartbeat reply from %v fail, rf.nextIndex[server] : %v", server, rf.nextIndex[server]))
-			rf.nextIndex[server] = args.PrevLogIndex - 1
+			rf.nextIndex[server] = reply.NextIndex
+			// if reply.ConflictTerm == -1 {
+			// 	rf.nextIndex[server] = reply.NextIndex
+			// } else {
+			// 	for index, logEntry := range rf.log {
+			// 		if logEntry.Term > reply.ConflictTerm {
+			// 			rf.nextIndex[server] = index
+			// 			break
+			// 		}
+			// 	}
+			// }
 			rf.mu.Unlock()
 		} else {
 			rf.mu.Lock()
@@ -761,6 +798,11 @@ func (rf *Raft) logger(content string) {
 	if rf.role == CANDIDATE {
 		role = "candidate"
 	}
-	fmt.Printf("%v server role(%v),term(%v),lastApplied(%v),commitIndex(%v),lenLog(%v): %v\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, len(rf.log), content)
+	lastLogIndex := len(rf.log) - 1
+	lastLogTerm := -1
+	if lastLogIndex != -1 {
+		lastLogTerm = rf.log[lastLogIndex].Term
+	}
+	fmt.Printf("%v server role(%v),term(%v),lastApplied(%v),commitIndex(%v),lastLogIndex(%v),lastLogTerm(%v): %v\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, lastLogIndex, lastLogTerm, content)
 
 }

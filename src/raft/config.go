@@ -504,3 +504,13 @@ func (cfg *config) end() {
 		fmt.Printf("  %4.1f  %d %4d %4d\n", t, npeers, nrpc, ncmds)
 	}
 }
+
+func (cfg *config) debug(servers int) {
+	fmt.Printf("DEBUG : connected servers include :")
+	for i := 0; i < servers; i++ {
+		if cfg.connected[i] {
+			fmt.Printf(" %v", i)
+		}
+	}
+	fmt.Println()
+}
