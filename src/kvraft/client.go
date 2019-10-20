@@ -1,13 +1,21 @@
 package raftkv
 
-import "labrpc"
-import "crypto/rand"
-import "math/big"
-
+import (
+	"crypto/rand"
+	"labrpc"
+	"log"
+	"math/big"
+	"sync"
+	"time"
+)
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	mu         sync.Mutex
+	clerkID    int64
+	queryId    int
+	lastLeader int
 }
 
 func nrand() int64 {
@@ -20,6 +28,9 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.clerkID = nrand()
+	ck.queryId = 0
+	ck.lastLeader = 0
 	// You'll have to add code here.
 	return ck
 }
@@ -39,7 +50,33 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+	ck.mu.Lock()
+	args := GetArgs{
+		Cid:     ck.clerkID,
+		QueryID: ck.queryId,
+		Key:     key,
+	}
+	ck.queryId++
+	lastLeader := ck.lastLeader
+	ck.mu.Unlock()
+
+	ret := ""
+
+	log.Printf("client call a get rpc with key : %v, Cid : %v, QueryID : %v", args.Key, args.Cid, args.QueryID)
+
+	for {
+		reply := GetReply{}
+		ok := ck.servers[lastLeader].Call("KVServer.Get", &args, &reply)
+		if ok && reply.WrongLeader == false && reply.Err == "" {
+			ret = reply.Value
+			break
+		} else if reply.Err == "error : old command" {
+			break
+		}
+		lastLeader = (lastLeader + 1) % len(ck.servers)
+		time.Sleep(time.Duration(50) * time.Millisecond)
+	}
+	return ret
 }
 
 //
@@ -54,11 +91,37 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	ck.mu.Lock()
+	args := PutAppendArgs{
+		Cid:     ck.clerkID,
+		QueryID: ck.queryId,
+		Op:      op,
+		Key:     key,
+		Value:   value,
+	}
+	ck.queryId++
+	lastLeader := ck.lastLeader
+	ck.mu.Unlock()
+
+	for {
+		log.Printf("clerk call %v server the PutAppend rpc\n", lastLeader)
+		reply := PutAppendReply{}
+		ok := ck.servers[lastLeader].Call("KVServer.PutAppend", &args, &reply)
+		if ok && reply.WrongLeader == false && reply.Err == "" {
+			break
+		} else if reply.Err == "error : old command" {
+			break
+		}
+		lastLeader = (lastLeader + 1) % len(ck.servers)
+		time.Sleep(time.Duration(50) * time.Millisecond)
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
+	log.Printf("cleak try to put key : %v value : %v\n", key, value)
 	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
+	log.Printf("cleak try to append key : %v value : %v\n", key, value)
 	ck.PutAppend(key, value, "Append")
 }
