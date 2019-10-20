@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"fmt"
 	"labrpc"
+	"log"
 	"math/rand"
 	"sort"
 	"sync"
@@ -803,6 +804,5 @@ func (rf *Raft) logger(content string) {
 	if lastLogIndex != -1 {
 		lastLogTerm = rf.log[lastLogIndex].Term
 	}
-	fmt.Printf("%v server role(%v),term(%v),lastApplied(%v),commitIndex(%v),lastLogIndex(%v),lastLogTerm(%v): %v\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, lastLogIndex, lastLogTerm, content)
-
+	log.Printf("Raft %v server role(%v),term(%v),lastApplied(%v),commitIndex(%v),lastLogIndex(%v),lastLogTerm(%v): %v\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, lastLogIndex, lastLogTerm, content)
 }
