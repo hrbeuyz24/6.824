@@ -1,0 +1,3 @@
+  - 需要一个channel通知每个请求是否完成，channel不能放到请求的参数中，而要由kv server总体管理，因为每个raft都会执行相同的命令，但只需要一个返回参数。(lab3)
+  - 为什么get操作可以重复加入到log日志中？（未解决）(lab3)
+  - leader发送心跳的频率不能太高，否则follower可能不按序收到heartbeat，导致前面的heartbeat将后面的heartbeat更新覆盖。(lab2C)
