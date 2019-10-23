@@ -1,6 +1,7 @@
 package raftkv
 
 import (
+	"fmt"
 	"linearizability"
 	"log"
 	"math/rand"
@@ -61,10 +62,10 @@ func spawn_clients_and_wait(t *testing.T, cfg *config, ncli int, fn func(me int,
 		ca[cli] = make(chan bool)
 		go run_client(t, cfg, cli, ca[cli], fn)
 	}
-	// log.Printf("spawn_clients_and_wait: waiting for clients")
+	log.Printf("spawn_clients_and_wait: waiting for clients")
 	for cli := 0; cli < ncli; cli++ {
 		ok := <-ca[cli]
-		// log.Printf("spawn_clients_and_wait: client %d is done\n", cli)
+		log.Printf("spawn_clients_and_wait: client %d is done\n", cli)
 		if ok == false {
 			t.Fatalf("failure")
 		}
@@ -180,7 +181,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 	}
 	title = title + " (" + part + ")" // 3A or 3B
 
-	const nservers = 5
+	const nservers = 1
 	cfg := make_config(t, nservers, unreliable, maxraftstate)
 	defer cfg.cleanup()
 
@@ -671,8 +672,10 @@ func TestSnapshotSize3B(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		Put(cfg, ck, "x", "0")
 		check(cfg, t, ck, "x", "0")
+		fmt.Printf("DEBUG : check ok\n")
 		Put(cfg, ck, "x", "1")
 		check(cfg, t, ck, "x", "1")
+		fmt.Printf("DEBUG : check ok\n")
 	}
 
 	// check that servers have thrown away most of their log entries

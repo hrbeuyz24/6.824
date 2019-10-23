@@ -55,6 +55,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	SnapShotData []byte
 }
 
 type LogEntry struct {
@@ -75,7 +76,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	currentTerm int
-	isVoted     map[int]bool
+	isVoted     map[int]int
 	serverNum   int
 	commitIndex int
 	log         []LogEntry
@@ -166,7 +167,7 @@ func (rf *Raft) readPersist(data []byte) {
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 	var currentTerm int
-	var isVoted map[int]bool
+	var isVoted map[int]int
 	var log []LogEntry
 	var lastIncludedTerm int
 	var lastIncludedIndex int
@@ -201,16 +202,20 @@ func (rf *Raft) getLog(index int) LogEntry {
 	return rf.log[index-rf.lastIncludedIndex]
 }
 
-func (rf *Raft) SnapShot(index int, data []byte) {
+func (rf *Raft) SnapShot(data []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	index := rf.lastApplied
 	if index <= rf.lastIncludedIndex {
 		return
 	}
+	tmp := rf.lastIncludedIndex + 1
 	rf.log = rf.log[index-rf.lastIncludedIndex:]
 	rf.lastIncludedIndex = index
 	rf.lastIncludedTerm = rf.getLog(index).Term
 	rf.persister.SaveStateAndSnapshot(rf.persistByte(), data)
+
+	rf.logger(fmt.Sprintf("do snapshot from log %v to log %v", tmp, index))
 }
 
 //
@@ -236,10 +241,13 @@ type RequestVoteReply struct {
 }
 
 type HeartBeatArgs struct {
+	ID           int
 	Term         int
 	LeaderId     int
 	PrevLogTerm  int
 	PrevLogIndex int
+	LastLogIndex int
+	LastLogTerm  int
 	Entries      []LogEntry
 	LeaderCommit int
 }
@@ -254,13 +262,13 @@ type HeartBeatReply struct {
 type InstallSnapshotArgs struct {
 	Term              int
 	LeaderId          int
-	lastIncludedIndex int
-	lastIncludedTerm  int
-	data              []byte
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Data              []byte
 }
 
 type InstallSnapshotReply struct {
-	term int
+	Term int
 }
 
 func (rf *Raft) send(ch chan struct{}) {
@@ -329,7 +337,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//rf.voteNotify <- struct{}{}
 
 	rf.logger(fmt.Sprintf("votes for %v server", args.CandidateId))
-	rf.isVoted[args.Term] = true
+	rf.isVoted[args.Term] = args.CandidateId
 }
 
 func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
@@ -337,10 +345,12 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	rf.logger(fmt.Sprintf("receives from %v server handle heartbeat rpc", args.LeaderId))
+	rf.logger(fmt.Sprintf("receives from %v server %v handle heartbeat rpc", args.LeaderId, args.ID))
 
 	if args.Term >= rf.currentTerm {
 		rf.role = FOLLOWER
+		rf.currentTerm = args.Term
+		rf.persist()
 		rf.logger("turn to follower")
 	}
 
@@ -350,11 +360,19 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 		return
 	}
 
+	//判断heartbeat的时效性
+	lastLogIndex := rf.getLogLen()
+	lastLogTerm := rf.getLastLog().Term
+	if lastLogTerm > args.LastLogTerm || (lastLogTerm == args.LastLogTerm && lastLogIndex > args.LastLogIndex) {
+		rf.logger(fmt.Sprintf("receives %v heartbeat is too old with args.LastLogTerm : %v, rf.lastLogTerm : %v, args.lastLogIndex : %v, rf.lastLogIndex : %v", args.ID, args.LastLogTerm, lastLogTerm, args.LastLogIndex, lastLogIndex))
+		reply.Success = true
+		return
+	}
+
 	rf.logger("send heartBeatNotify to itself")
 	rf.send(rf.heartBeatNotify)
 	//rf.heartBeatNotify <- struct{}{}
 
-	rf.currentTerm = args.Term
 	reply.Success = true
 
 	// prevLogTerm := -1
@@ -362,7 +380,7 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 	// 	prevLogTerm = rf.log[args.PrevLogIndex].Term
 	// }
 
-	if args.PrevLogIndex > rf.getLogLen() || rf.getLog(args.PrevLogIndex).Term != args.PrevLogTerm {
+	if args.PrevLogIndex > rf.getLogLen() || (rf.lastIncludedIndex < args.PrevLogIndex && rf.getLog(args.PrevLogIndex).Term != args.PrevLogTerm) {
 
 		reply.NextIndex = 0
 		if args.PrevLogIndex > rf.getLogLen() {
@@ -398,9 +416,24 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 		return
 	}
 
-	currentIndex := args.PrevLogIndex + 1
+	for i := 0; i < len(args.Entries); i++ {
+		index := i + args.PrevLogIndex + 1
+		if index <= rf.lastIncludedIndex || index <= rf.commitIndex {
+			continue
+		}
+		rf.log = append(rf.log[:index-rf.lastIncludedIndex], args.Entries[i:]...)
+		break
+	}
 
-	rf.log = append(rf.log[:currentIndex-rf.lastIncludedIndex], args.Entries[:]...)
+	// if rf.lastIncludedIndex > args.PrevLogIndex {
+	// 	if rf.lastIncludedIndex < args.PrevLogIndex+len(args.Entries) {
+	// 		args.Entries = args.Entries[rf.lastIncludedIndex-args.PrevLogIndex:]
+	// 		rf.log = append(rf.log[:1], args.Entries[:]...)
+	// 	}
+	// } else {
+	// 	currentIndex := args.PrevLogIndex + 1
+	// 	rf.log = append(rf.log[:currentIndex-rf.lastIncludedIndex], args.Entries[:]...)
+	// }
 
 	// for _, logEntry := range args.Entries {
 	// 	if currentIndex >= len(rf.log) {
@@ -411,6 +444,10 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 	// 	currentIndex++
 	// }
 
+	if len(rf.log) != 0 {
+		rf.logger(fmt.Sprintf("after append new log with lastLogTerm : %v, lastLogIndex : %v", rf.getLastLog().Term, rf.getLogLen()))
+	}
+
 	if args.LeaderCommit > rf.commitIndex {
 		tmp := rf.commitIndex
 		rf.commitIndex = args.LeaderCommit
@@ -420,10 +457,97 @@ func (rf *Raft) HandleHeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) {
 		rf.logger(fmt.Sprintf("updateCommitIndex from %v to %v", tmp, rf.commitIndex))
 		rf.updateAppliedIndex()
 	}
-	if len(rf.log) != 0 {
-		rf.logger(fmt.Sprintf("after append new log with lastLogTerm : %v, lastLogIndex : %v", rf.getLastLog().Term, rf.getLogLen()))
-	}
 	rf.persist()
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.logger(fmt.Sprintf("receives snapshot from %v server", args.LeaderId))
+
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		return
+	}
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.role = FOLLOWER
+	}
+	reply.Term = rf.currentTerm
+
+	if args.LastIncludedIndex <= rf.lastIncludedIndex {
+		rf.logger(fmt.Sprintf("install snapshot fail, receives snapshot's lastIncludedIndex %v is smaller than own %v", args.LastIncludedIndex, rf.lastIncludedIndex))
+		return
+	}
+
+	if args.LastIncludedIndex > rf.getLogLen() {
+		rf.log = append(make([]LogEntry, 0), LogEntry{args.LastIncludedTerm, nil})
+	} else {
+		rf.log = rf.log[args.LastIncludedIndex-rf.lastIncludedIndex:]
+	}
+
+	rf.lastIncludedIndex = args.LastIncludedIndex
+	rf.lastIncludedTerm = args.LastIncludedTerm
+	if rf.commitIndex < args.LastIncludedIndex {
+		rf.commitIndex = args.LastIncludedIndex
+	}
+	if rf.lastApplied < args.LastIncludedIndex {
+		rf.lastApplied = args.LastIncludedIndex
+	}
+
+	rf.logger(fmt.Sprintf("install snapshot success, rf.commitIndex : %v, rf.lastApplied : %v, rf.lastIncludedIndex : %v, rf.lastIncludedTerm : %v", rf.commitIndex, rf.lastApplied, rf.lastIncludedIndex, rf.lastIncludedTerm))
+	rf.persister.SaveStateAndSnapshot(rf.persistByte(), args.Data)
+
+	rf.applyCh <- ApplyMsg{
+		CommandValid: false,
+		SnapShotData: args.Data,
+	}
+}
+
+func (rf *Raft) sendSnapshot(server int) {
+	rf.mu.Lock()
+	rf.logger(fmt.Sprintf("send snapshot to %v server", server))
+	args := &InstallSnapshotArgs{
+		Term:              rf.currentTerm,
+		LeaderId:          rf.me,
+		LastIncludedIndex: rf.lastIncludedIndex,
+		LastIncludedTerm:  rf.lastIncludedTerm,
+		Data:              rf.persister.ReadSnapshot(),
+	}
+	rf.mu.Unlock()
+
+	reply := &InstallSnapshotReply{}
+	ok := rf.installSnapshotRpc(server, args, reply)
+
+	if !ok {
+		rf.logger("install snapshot return false")
+		return
+	}
+
+	if reply.Term > args.Term {
+		rf.logger("install snapshot reply's term is bigger than currentTerm, be follower")
+		rf.beFollower(reply.Term)
+		return
+	}
+
+	rf.mu.Lock()
+	if rf.matchIndex[server] < rf.lastIncludedIndex {
+		rf.matchIndex[server] = rf.lastIncludedIndex
+	}
+	if rf.nextIndex[server] < rf.lastIncludedIndex+1 {
+		rf.nextIndex[server] = rf.lastIncludedIndex + 1
+	}
+	rf.updateCommitIndex()
+	rf.updateAppliedIndex()
+	rf.mu.Unlock()
+
+}
+
+func randN() int {
+	rand.Seed(time.Now().UnixNano())
+	return rand.Intn(10000000000)
 }
 
 func (rf *Raft) sendHeartBeatTo(server int) {
@@ -440,6 +564,12 @@ func (rf *Raft) sendHeartBeatTo(server int) {
 			rf.mu.Unlock()
 			return
 		}
+
+		if rf.nextIndex[server] <= rf.lastIncludedIndex {
+			rf.mu.Unlock()
+			go rf.sendSnapshot(server)
+			return
+		}
 		//rf.logger(fmt.Sprintf("nextIndex[%v] : %v", server, rf.nextIndex[server]))
 		// if rf.nextIndex[server] != 0 {
 		// 	//rf.logger(fmt.Sprintf("nextIndex[%v] : %v", server, rf.nextIndex[server]))
@@ -453,17 +583,23 @@ func (rf *Raft) sendHeartBeatTo(server int) {
 
 		log = append(log, rf.log[rf.nextIndex[server]-rf.lastIncludedIndex:]...)
 
-		rf.logger(fmt.Sprintf("send to %v server logs from %v to %v", server, rf.nextIndex[server], rf.getLogLen()))
+		lastLogIndex := rf.getLogLen()
+		lastLogTerm := rf.getLastLog().Term
 		rf.mu.Unlock()
 
 		args := &HeartBeatArgs{
+			ID:           randN(),
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
 			PrevLogIndex: prevLogIndex,
 			PrevLogTerm:  prevLogTerm,
+			LastLogIndex: lastLogIndex,
+			LastLogTerm:  lastLogTerm,
 			Entries:      log,
 			LeaderCommit: rf.commitIndex,
 		}
+
+		rf.logger(fmt.Sprintf("send to %v server logs from %v to %v, commandid : %v", server, rf.nextIndex[server], rf.getLogLen(), args.ID))
 		ok := rf.sendHeartBeat(server, args, reply)
 
 		if !ok {
@@ -492,6 +628,7 @@ func (rf *Raft) sendHeartBeatTo(server int) {
 			// }
 			rf.mu.Unlock()
 		} else {
+			rf.logger(fmt.Sprintf("send heartbeat to %v server return true, commandid : %v", server, args.ID))
 			rf.mu.Lock()
 			if rf.matchIndex[server] < args.PrevLogIndex+len(log) {
 				rf.logger(fmt.Sprintf("update matchIndex[%v] from %v to %v", server, rf.matchIndex[server], args.PrevLogIndex+len(log)))
@@ -522,6 +659,8 @@ func (rf *Raft) updateCommitIndex() {
 		rf.logger(fmt.Sprintf("updateCommitIndex from %v to %v", rf.commitIndex, N))
 		rf.commitIndex = N
 		rf.updateAppliedIndex()
+		rf.logger("braodcast after update the commitIndex")
+		go rf.broadcast()
 	}
 }
 
@@ -593,6 +732,12 @@ func (rf *Raft) sendHeartBeat(server int, args *HeartBeatArgs, reply *HeartBeatR
 
 	rf.logger(fmt.Sprintf("send to %v server heart beat with prevLogTerm : %v, prevLogIndex : %v", server, args.PrevLogTerm, args.PrevLogIndex))
 	ok := rf.peers[server].Call("Raft.HandleHeartBeat", args, reply)
+	return ok
+}
+
+func (rf *Raft) installSnapshotRpc(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+	rf.logger(fmt.Sprintf("send to %v server install snapshot with LastIncludedIndex: %v, LastIncludedTerm: %v", server, args.LastIncludedIndex, args.LastIncludedTerm))
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 	return ok
 }
 
@@ -721,7 +866,7 @@ func (rf *Raft) startElection() {
 		_, ok := rf.isVoted[currentTerm]
 		if !ok {
 			v++
-			rf.isVoted[currentTerm] = true
+			rf.isVoted[currentTerm] = rf.me
 		} else {
 			rf.logger(fmt.Sprintf("has voted for %v", currentTerm))
 		}
@@ -827,7 +972,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.serverNum = len(rf.peers)
 	rf.commitIndex = 0
-	rf.isVoted = make(map[int]bool)
+	rf.isVoted = make(map[int]int)
 	rf.lastApplied = 0
 	rf.log = make([]LogEntry, 0)
 	rf.log = append(rf.log, LogEntry{-1, nil})
@@ -873,5 +1018,5 @@ func (rf *Raft) logger(content string) {
 	lastLogIndex := rf.getLogLen()
 	lastLogTerm := rf.getLastLog().Term
 
-	log.Printf("Raft %v server role(%v),term(%v),lastApplied(%v),commitIndex(%v),lastLogIndex(%v),lastLogTerm(%v): %v\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, lastLogIndex, lastLogTerm, content)
+	log.Printf("Raft %v server role(%v),term(%v),lastApplied(%v),commitIndex(%v),lastLogIndex(%v),lastLogTerm(%v), lastIncludedIndex(%v): %v, \n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, lastLogIndex, lastLogTerm, rf.lastIncludedIndex, content)
 }

@@ -1,3 +1,7 @@
-  - 需要一个channel通知每个请求是否完成，channel不能放到请求的参数中，而要由kv server总体管理，因为每个raft都会执行相同的命令，但只需要一个返回参数。(lab3)
-  - 为什么get操作可以重复加入到log日志中？（未解决）(lab3)
-  - leader发送心跳的频率不能太高，否则follower可能不按序收到heartbeat，导致前面的heartbeat将后面的heartbeat更新覆盖。(lab2C)
+  - 需要一个channel通知每个请求是否完成，channel不能放到请求的参数中，而要由kv server总体管理，因为每个raft都会执行相同的命令，但只需要一个返回参数。(lab3A)
+  - 为什么get操作可以重复加入到log日志中？（未解决）(lab3A)
+  - 保存快照是raft服务通知以命令的形式通知外层的kv server，kvserver读取raft保存到硬盘的快照信息。(lab3B)
+  - raft server 收到的快照信息落后与自己快照信息时，应该丢弃收到的快照信息
+  - 后面发送的heartbeat的log可能会把前面发送的heartbeat给覆盖，接受旧的heartbeat会丢失某些log（未解决）
+  - 1(leader),2，3服务器接入网络，当1发送了log给到2,3并提交了自己的所有日志，更新了自己的commitIndex值，此时2,3还没来得及更新自己的commitIndex,leader就crash了,这样会造成什么问题？（未解决）
+  - 某个leader被隔离一段时间后，重新加入网络，刚加入时还处于leader状态，还会发送heartbeat包，可能发送的heartbeart包的term是最大的，但是日志是旧的，所以接受heartbeat时也需要判断日志是否过期，如何判断（未解决）

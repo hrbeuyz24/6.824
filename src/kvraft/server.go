@@ -1,6 +1,7 @@
 package raftkv
 
 import (
+	"bytes"
 	"fmt"
 	"labgob"
 	"labrpc"
@@ -43,6 +44,7 @@ type KVServer struct {
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 
+	persister     *raft.Persister
 	commandRecord map[int64]int
 	kvdb          map[string]string
 	replyCh       map[string]chan CommonReply
@@ -200,13 +202,49 @@ func (kv *KVServer) send(ch chan CommonReply, reply CommonReply) {
 	ch <- reply
 }
 
+func (kv *KVServer) doSnapshot() {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	kv.mu.Lock()
+	e.Encode(kv.commandRecord)
+	e.Encode(kv.kvdb)
+	kv.mu.Unlock()
+	kv.rf.SnapShot(w.Bytes())
+}
+
+func (kv *KVServer) readSnapshot(data []byte) {
+	if data == nil || len(data) < 1 {
+		return
+	}
+	kv.mu.Lock()
+	kv.logger("start readSnapshot")
+	w := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(w)
+	if d.Decode(&kv.commandRecord) != nil ||
+		d.Decode(&kv.kvdb) != nil {
+		panic("read Snapshot error")
+	}
+	kv.mu.Unlock()
+}
+
 func (kv *KVServer) working() {
 	for {
+
+		kv.mu.Lock()
+		currentSize := kv.persister.RaftStateSize()
+		maxraftstate := kv.maxraftstate
+		kv.mu.Unlock()
+		if maxraftstate > 0 && maxraftstate < currentSize {
+			kv.logger("start do snapshot")
+			go kv.doSnapshot()
+		}
+
 		select {
 		case <-kv.quitCh:
 			return
 		case o := <-kv.applyCh:
 			if !o.CommandValid {
+				kv.readSnapshot(o.SnapShotData)
 				continue
 			}
 			op := o.Command.(Op)
@@ -290,6 +328,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.kvdb = make(map[string]string)
 	kv.commandRecord = make(map[int64]int)
 	kv.replyCh = make(map[string]chan CommonReply)
+	kv.persister = persister
+
+	kv.readSnapshot(kv.persister.ReadSnapshot())
 
 	go kv.working()
 
