@@ -202,10 +202,9 @@ func (rf *Raft) getLog(index int) LogEntry {
 	return rf.log[index-rf.lastIncludedIndex]
 }
 
-func (rf *Raft) SnapShot(data []byte) {
+func (rf *Raft) SnapShot(index int, data []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	index := rf.lastApplied
 	if index <= rf.lastIncludedIndex {
 		return
 	}
@@ -488,22 +487,25 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.log = rf.log[args.LastIncludedIndex-rf.lastIncludedIndex:]
 	}
 
+	rf.applyCh <- ApplyMsg{
+		CommandValid: false,
+		SnapShotData: args.Data,
+	}
+
 	rf.lastIncludedIndex = args.LastIncludedIndex
 	rf.lastIncludedTerm = args.LastIncludedTerm
 	if rf.commitIndex < args.LastIncludedIndex {
 		rf.commitIndex = args.LastIncludedIndex
 	}
-	if rf.lastApplied < args.LastIncludedIndex {
-		rf.lastApplied = args.LastIncludedIndex
-	}
+
+	rf.lastApplied = args.LastIncludedIndex
+	// if rf.lastApplied < args.LastIncludedIndex {
+	// 	rf.lastApplied = args.LastIncludedIndex
+	// }
 
 	rf.logger(fmt.Sprintf("install snapshot success, rf.commitIndex : %v, rf.lastApplied : %v, rf.lastIncludedIndex : %v, rf.lastIncludedTerm : %v", rf.commitIndex, rf.lastApplied, rf.lastIncludedIndex, rf.lastIncludedTerm))
 	rf.persister.SaveStateAndSnapshot(rf.persistByte(), args.Data)
 
-	rf.applyCh <- ApplyMsg{
-		CommandValid: false,
-		SnapShotData: args.Data,
-	}
 }
 
 func (rf *Raft) sendSnapshot(server int) {

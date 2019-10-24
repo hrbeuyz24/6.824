@@ -5,3 +5,4 @@
   - 后面发送的heartbeat的log可能会把前面发送的heartbeat给覆盖，接受旧的heartbeat会丢失某些log（未解决）
   - 1(leader),2，3服务器接入网络，当1发送了log给到2,3并提交了自己的所有日志，更新了自己的commitIndex值，此时2,3还没来得及更新自己的commitIndex,leader就crash了,这样会造成什么问题？（未解决）
   - 某个leader被隔离一段时间后，重新加入网络，刚加入时还处于leader状态，还会发送heartbeat包，可能发送的heartbeart包的term是最大的，但是日志是旧的，所以接受heartbeat时也需要判断日志是否过期，如何判断（未解决）
+  - 开始做快照操作后，将kv map中的数据保存下来，但此时raft server apply了新的日志，快照操作继续完成，将日志截断到最新的apply index，这样，最新apply的日志既没有保存在kv map中，在raft也被截断，需要将kv map的数据保存和截断日志操作同步起来,在保存kv map时加kv.mu，防止在被修改，同时raft在截断日志时再开一个go，为了让之前的kv server释放锁，如果既有kv server的锁，也有raft 的锁会产生死锁。(lab3B)

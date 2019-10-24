@@ -81,8 +81,9 @@ func (kv *KVServer) del(queryName string) {
 
 	_, ok := kv.replyCh[queryName]
 	if ok {
-		close(kv.replyCh[queryName])
+		ch := kv.replyCh[queryName]
 		delete(kv.replyCh, queryName)
+		close(ch)
 	}
 }
 
@@ -118,8 +119,12 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			reply.Err = "error : " + r.Err
 			kv.logger(fmt.Sprintf("get query(%v) ", queryName) + string(reply.Err) + " in kv server")
 		} else {
-			kv.logger(fmt.Sprintf("get query(%v) success, key : %v, value : %v", queryName, args.Key, r.Value))
-			reply.Value = r.Value
+			kv.mu.Lock()
+			reply.Value = kv.kvdb[args.Key]
+			kv.mu.Unlock()
+
+			kv.logger(fmt.Sprintf("get query(%v) success, key : %v, value : %v", queryName, args.Key, reply.Value))
+			//reply.Value = r.Value
 		}
 	case <-time.After(400 * time.Millisecond):
 		kv.logger(fmt.Sprintf("get query(%v) time out in kv server", queryName))
@@ -131,8 +136,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-
-	kv.logger(fmt.Sprintf("receives PutAppend Request op : %v, key : %v, value : %v", args.Op, args.Key, args.Value))
 
 	op := Op{
 		Key:     args.Key,
@@ -151,6 +154,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	queryName := kv.getQueryName(args.Cid, args.QueryID)
 
+	kv.logger(fmt.Sprintf("receives PutAppend(%v) Request op : %v, key : %v, value : %v", queryName, args.Op, args.Key, args.Value))
+
+	kv.createReplyCh(queryName)
+	replyCh := kv.getReplyCh(queryName)
+
 	_, _, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.WrongLeader = true
@@ -158,9 +166,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.logger(args.Op + fmt.Sprintf(" query(%v) kv server is not a leader", queryName))
 		return
 	}
-
-	kv.createReplyCh(queryName)
-	replyCh := kv.getReplyCh(queryName)
 
 	select {
 	case r := <-replyCh:
@@ -202,14 +207,12 @@ func (kv *KVServer) send(ch chan CommonReply, reply CommonReply) {
 	ch <- reply
 }
 
-func (kv *KVServer) doSnapshot() {
+func (kv *KVServer) doSnapshot(applyIndex int) {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	kv.mu.Lock()
 	e.Encode(kv.commandRecord)
 	e.Encode(kv.kvdb)
-	kv.mu.Unlock()
-	kv.rf.SnapShot(w.Bytes())
+	go kv.rf.SnapShot(applyIndex, w.Bytes())
 }
 
 func (kv *KVServer) readSnapshot(data []byte) {
@@ -230,15 +233,6 @@ func (kv *KVServer) readSnapshot(data []byte) {
 func (kv *KVServer) working() {
 	for {
 
-		kv.mu.Lock()
-		currentSize := kv.persister.RaftStateSize()
-		maxraftstate := kv.maxraftstate
-		kv.mu.Unlock()
-		if maxraftstate > 0 && maxraftstate < currentSize {
-			kv.logger("start do snapshot")
-			go kv.doSnapshot()
-		}
-
 		select {
 		case <-kv.quitCh:
 			return
@@ -249,7 +243,7 @@ func (kv *KVServer) working() {
 			}
 			op := o.Command.(Op)
 			queryName := kv.getQueryName(op.Cid, op.QueryID)
-			replyCh := kv.getReplyCh(queryName)
+			kv.logger(fmt.Sprintf("try to commit query(%v)", queryName))
 			kv.mu.Lock()
 
 			var err Err
@@ -259,10 +253,13 @@ func (kv *KVServer) working() {
 			queryID, ok := kv.commandRecord[op.Cid]
 			if !ok || queryID < op.QueryID {
 				if op.OpType == PUT {
+					kv.logger(fmt.Sprintf("commit put query(%v), key : %v, put value : %v", queryName, op.Key, op.Value))
 					kv.kvdb[op.Key] = op.Value
 				} else if op.OpType == APPEND {
 					kv.kvdb[op.Key] += op.Value
+					kv.logger(fmt.Sprintf("commit append query(%v), key : %v, new value : %v", queryName, op.Key, kv.kvdb[op.Key]))
 				}
+
 				ret = kv.kvdb[op.Key]
 
 				// QUESTION
@@ -271,11 +268,16 @@ func (kv *KVServer) working() {
 				}
 			} else {
 				success = false
+				kv.logger(fmt.Sprintf("commit query(%v) fail, old command, op.QueryID : %v, kv.queryID : %v", queryName, op.QueryID, queryID))
 				err = "old command"
 			}
-			kv.mu.Unlock()
 
-			if replyCh != nil {
+			if kv.maxraftstate > 0 && kv.maxraftstate < kv.persister.RaftStateSize() {
+				kv.logger("start do snapshot")
+				kv.doSnapshot(o.CommandIndex)
+			}
+			replyCh, ok := kv.replyCh[queryName]
+			if ok && replyCh != nil {
 				r := CommonReply{
 					Err:     err,
 					Success: success,
@@ -283,6 +285,7 @@ func (kv *KVServer) working() {
 				}
 				kv.send(replyCh, r)
 			}
+			kv.mu.Unlock()
 
 			// if replyCh != nil {
 			// 	r := CommonReply{
