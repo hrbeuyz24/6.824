@@ -718,5 +718,5 @@ func TestSnapshotUnreliableRecoverConcurrentPartition3B(t *testing.T) {
 
 func TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable3B(t *testing.T) {
 	// Test: unreliable net, restarts, partitions, snapshots, linearizability checks (3B) ...
-	GenericTestLinearizability(t, "3B", 15, 7, true, true, true, 1000)
+	GenericTestLinearizability(t, "3B", 40, 7, true, true, true, 1000)
 }

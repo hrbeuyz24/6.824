@@ -1,12 +1,12 @@
 package shardmaster
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
 
 // import "time"
-import "fmt"
 
 func check(t *testing.T, groups []int, ck *Clerk) {
 	c := ck.Query(-1)
@@ -53,12 +53,15 @@ func check(t *testing.T, groups []int, ck *Clerk) {
 }
 
 func check_same_config(t *testing.T, c1 Config, c2 Config) {
+	fmt.Printf("DEBUG : c1.Num : %v, c2.Num : %v\n", c1.Num, c2.Num)
 	if c1.Num != c2.Num {
 		t.Fatalf("Num wrong")
 	}
+	fmt.Printf("DEBUG : c1.Shards: %v, c2.Shards: %v\n", c1.Shards, c2.Shards)
 	if c1.Shards != c2.Shards {
 		t.Fatalf("Shards wrong")
 	}
+	fmt.Printf("DEBUG : c1.Groups: %v, c2.Groups: %v\n", c1.Groups, c2.Groups)
 	if len(c1.Groups) != len(c2.Groups) {
 		t.Fatalf("number of Groups is wrong")
 	}
@@ -89,15 +92,20 @@ func TestBasic(t *testing.T) {
 	cfa := make([]Config, 6)
 	cfa[0] = ck.Query(-1)
 
+	fmt.Printf("DEBUG : 0 groups\n")
 	check(t, []int{}, ck)
 
 	var gid1 int = 1
 	ck.Join(map[int][]string{gid1: []string{"x", "y", "z"}})
+
+	fmt.Printf("DEBUG : 1 groups\n")
 	check(t, []int{gid1}, ck)
 	cfa[1] = ck.Query(-1)
 
 	var gid2 int = 2
 	ck.Join(map[int][]string{gid2: []string{"a", "b", "c"}})
+
+	fmt.Printf("DEBUG : 2 groups\n")
 	check(t, []int{gid1, gid2}, ck)
 	cfa[2] = ck.Query(-1)
 
@@ -126,6 +134,7 @@ func TestBasic(t *testing.T) {
 		cfg.ShutdownServer(s)
 		for i := 0; i < len(cfa); i++ {
 			c := ck.Query(cfa[i].Num)
+			fmt.Printf("DEBUG : check %v same config\n", i)
 			check_same_config(t, c, cfa[i])
 		}
 		cfg.StartServer(s)

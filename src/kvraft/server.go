@@ -119,12 +119,12 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			reply.Err = "error : " + r.Err
 			kv.logger(fmt.Sprintf("get query(%v) ", queryName) + string(reply.Err) + " in kv server")
 		} else {
-			kv.mu.Lock()
-			reply.Value = kv.kvdb[args.Key]
-			kv.mu.Unlock()
+			// kv.mu.Lock()
+			// reply.Value = kv.kvdb[args.Key]
+			// kv.mu.Unlock()
 
 			kv.logger(fmt.Sprintf("get query(%v) success, key : %v, value : %v", queryName, args.Key, reply.Value))
-			//reply.Value = r.Value
+			reply.Value = r.Value
 		}
 	case <-time.After(400 * time.Millisecond):
 		kv.logger(fmt.Sprintf("get query(%v) time out in kv server", queryName))
@@ -159,6 +159,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.createReplyCh(queryName)
 	replyCh := kv.getReplyCh(queryName)
 
+	defer kv.del(queryName)
+
 	_, _, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.WrongLeader = true
@@ -180,7 +182,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.logger(args.Op + fmt.Sprintf(" query(%v) time out in kv server", queryName))
 		reply.Err = "error : timeout"
 	}
-	kv.del(queryName)
 }
 
 //
@@ -244,7 +245,7 @@ func (kv *KVServer) working() {
 			op := o.Command.(Op)
 			queryName := kv.getQueryName(op.Cid, op.QueryID)
 			kv.logger(fmt.Sprintf("try to commit query(%v)", queryName))
-			kv.mu.Lock()
+			//kv.mu.Lock()
 
 			var err Err
 			err = ""
@@ -276,6 +277,7 @@ func (kv *KVServer) working() {
 				kv.logger("start do snapshot")
 				kv.doSnapshot(o.CommandIndex)
 			}
+			kv.mu.Lock()
 			replyCh, ok := kv.replyCh[queryName]
 			if ok && replyCh != nil {
 				r := CommonReply{
@@ -286,6 +288,7 @@ func (kv *KVServer) working() {
 				kv.send(replyCh, r)
 			}
 			kv.mu.Unlock()
+			//kv.mu.Unlock()
 
 			// if replyCh != nil {
 			// 	r := CommonReply{
