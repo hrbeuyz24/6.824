@@ -284,29 +284,74 @@ func (sm *ShardMaster) divide(config *Config) {
 		return
 	}
 
-	// TODO
-	g := []int{}
+	num := NShards / groupNum
+	rest := NShards - num*groupNum
+
+	groupIDs := []int{}
 	for key := range config.Groups {
-		g = append(g, key)
+		groupIDs = append(groupIDs, key)
 	}
-	length := len(g)
-	sort.Ints(g)
-	for index := 0; index < len(config.Shards); index++ {
-		config.Shards[index] = g[index%length]
+	// 避免map随机顺序访问
+	sort.Ints(groupIDs)
+
+	gNum := make(map[int]int)
+	for i := 0; i < NShards; i++ {
+		gNum[config.Shards[i]]++
 	}
+
+	v := make(map[int]bool)
+	for i := 0; i < NShards; i++ {
+		gid := config.Shards[i]
+		if _, ok := config.Groups[gid]; ok && (gNum[gid] <= num || gNum[gid] == num+1 && rest > 0) {
+			if gNum[gid] == num+1 {
+				gNum[gid]--
+				v[gid] = true
+				rest--
+			}
+		} else {
+			mark := false
+			for _, key := range groupIDs {
+				if val, ok := gNum[key]; !ok || val < num {
+					gNum[key]++
+					gNum[gid]--
+					config.Shards[i] = key
+					mark = true
+					break
+				}
+			}
+			if !mark {
+				for _, key := range groupIDs {
+					if val, _ := gNum[key]; val == num {
+						_, ok := v[key]
+						if ok {
+							continue
+						}
+						gNum[gid]--
+						config.Shards[i] = key
+						rest--
+						v[key] = true
+						if rest < 0 {
+							panic("divide error")
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// TODO
+	// g := []int{}
+	// for key := range config.Groups {
+	// 	g = append(g, key)
+	// }
+	// length := len(g)
+	// sort.Ints(g)
+	// for index := 0; index < len(config.Shards); index++ {
+	// 	config.Shards[index] = g[index%length]
+	// }
 
 	sm.logger(fmt.Sprintf("after divide config.Shards : %v", config.Shards))
-
-	// k := NShards / groupNum
-	// g := make(map[int]int)
-
-	// for _, val := range config.Shards {
-	// 	g[val]++
-	// }
-	// for index := 0; index < len(config.Shards); index++ {
-	// 	_, ok := config.Groups[config.Shards[index]]
-	// 	if ok &&
-	// }
 }
 
 func (sm *ShardMaster) working() {
