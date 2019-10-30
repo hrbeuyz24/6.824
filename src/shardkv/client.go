@@ -8,11 +8,15 @@ package shardkv
 // talks to the group that holds the key's shard.
 //
 
-import "labrpc"
-import "crypto/rand"
-import "math/big"
-import "shardmaster"
-import "time"
+import (
+	"crypto/rand"
+	"labrpc"
+	"log"
+	"math/big"
+	"shardmaster"
+	"sync"
+	"time"
+)
 
 //
 // which shard is a key in?
@@ -40,6 +44,9 @@ type Clerk struct {
 	config   shardmaster.Config
 	make_end func(string) *labrpc.ClientEnd
 	// You will have to modify this struct.
+	clerkID int64
+	queryId int
+	mu      sync.Mutex
 }
 
 //
@@ -56,6 +63,8 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.sm = shardmaster.MakeClerk(masters)
 	ck.make_end = make_end
 	// You'll have to add code here.
+	ck.clerkID = nrand()
+	ck.queryId = 0
 	return ck
 }
 
@@ -66,11 +75,19 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // You will have to modify this function.
 //
 func (ck *Clerk) Get(key string) string {
-	args := GetArgs{}
-	args.Key = key
+
+	shard := key2shard(key)
+	ck.mu.Lock()
+	args := GetArgs{
+		Cid:     ck.clerkID,
+		QueryID: ck.queryId,
+		Key:     key,
+		Shard:   shard,
+	}
+	ck.queryId++
+	ck.mu.Unlock()
 
 	for {
-		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
@@ -84,14 +101,15 @@ func (ck *Clerk) Get(key string) string {
 				if ok && (reply.Err == ErrWrongGroup) {
 					break
 				}
+				if ok && (reply.Err == ErrOldCommand) {
+					return ""
+				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 		// ask master for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}
-
-	return ""
 }
 
 //
@@ -99,14 +117,21 @@ func (ck *Clerk) Get(key string) string {
 // You will have to modify this function.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	args := PutAppendArgs{}
-	args.Key = key
-	args.Value = value
-	args.Op = op
 
+	shard := key2shard(key)
+	ck.mu.Lock()
+	args := PutAppendArgs{
+		Cid:     ck.clerkID,
+		QueryID: ck.queryId,
+		Op:      op,
+		Key:     key,
+		Value:   value,
+		Shard:   shard,
+	}
+	ck.queryId++
+	ck.mu.Unlock()
 
 	for {
-		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
@@ -119,6 +144,9 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				if ok && reply.Err == ErrWrongGroup {
 					break
 				}
+				if ok && (reply.Err == ErrOldCommand) {
+					return
+				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -128,8 +156,10 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) Put(key string, value string) {
+	log.Printf("cleak try to put key : %v value : %v\n", key, value)
 	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
+	log.Printf("cleak try to append key : %v value : %v\n", key, value)
 	ck.PutAppend(key, value, "Append")
 }

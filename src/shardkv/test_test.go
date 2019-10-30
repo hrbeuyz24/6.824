@@ -1,14 +1,15 @@
 package shardkv
 
-import "linearizability"
-
-import "testing"
-import "strconv"
-import "time"
-import "fmt"
-import "sync/atomic"
-import "sync"
-import "math/rand"
+import (
+	"fmt"
+	"linearizability"
+	"math/rand"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
 
 const linearizabilityCheckTimeout = 1 * time.Second
 
@@ -26,12 +27,16 @@ func TestStaticShards(t *testing.T) {
 	fmt.Printf("Test: static shards ...\n")
 
 	cfg := make_config(t, 3, false, -1)
+	fmt.Printf("DEBUG : finish make_config\n")
 	defer cfg.cleanup()
 
 	ck := cfg.makeClient()
 
 	cfg.join(0)
+	fmt.Printf("DEBUG : finish join 0\n")
 	cfg.join(1)
+
+	fmt.Printf("DEBUG : finish join 1\n")
 
 	n := 10
 	ka := make([]string, n)
@@ -45,11 +50,14 @@ func TestStaticShards(t *testing.T) {
 		check(t, ck, ka[i], va[i])
 	}
 
+	fmt.Printf("DEBUG : finish check1\n")
 	// make sure that the data really is sharded by
 	// shutting down one shard and checking that some
 	// Get()s don't succeed.
 	cfg.ShutdownGroup(1)
+	fmt.Printf("DEBUG : shutdown group 1\n")
 	cfg.checklogs() // forbid snapshots
+	fmt.Printf("DEBUG : finish check logs\n")
 
 	ch := make(chan bool)
 	for xi := 0; xi < n; xi++ {
@@ -59,6 +67,7 @@ func TestStaticShards(t *testing.T) {
 			check(t, ck1, ka[i], va[i])
 		}(xi)
 	}
+	fmt.Printf("DEBUG : finish check2\n")
 
 	// wait a bit, only about half the Gets should succeed.
 	ndone := 0
@@ -108,6 +117,7 @@ func TestJoinLeave(t *testing.T) {
 		check(t, ck, ka[i], va[i])
 	}
 
+	fmt.Printf("DEBUG : join 1\n")
 	cfg.join(1)
 
 	for i := 0; i < n; i++ {
@@ -117,6 +127,7 @@ func TestJoinLeave(t *testing.T) {
 		va[i] += x
 	}
 
+	fmt.Printf("DEBUG : leave 0\n")
 	cfg.leave(0)
 
 	for i := 0; i < n; i++ {

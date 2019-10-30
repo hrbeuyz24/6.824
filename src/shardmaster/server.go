@@ -411,14 +411,16 @@ func (sm *ShardMaster) working() {
 			}
 
 			// avoid concurrent map read and write
-			replyCh := sm.getReplyCh(queryName, false)
-			if replyCh != nil {
+			sm.mu.Lock()
+			replyCh, ok := sm.replyCh[queryName]
+			if ok && replyCh != nil {
 				replyCh <- CommonReply{
 					Success: success,
 					Err:     err,
 					Config:  config,
 				}
 			}
+			sm.mu.Unlock()
 		}
 	}
 }

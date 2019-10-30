@@ -1,21 +1,23 @@
 package shardkv
 
-import "shardmaster"
-import "labrpc"
-import "testing"
-import "os"
+import (
+	"labrpc"
+	"os"
+	"shardmaster"
+	"testing"
 
-// import "log"
-import crand "crypto/rand"
-import "math/big"
-import "math/rand"
-import "encoding/base64"
-import "sync"
-import "runtime"
-import "raft"
-import "strconv"
-import "fmt"
-import "time"
+	// import "log"
+	crand "crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"math/big"
+	"math/rand"
+	"raft"
+	"runtime"
+	"strconv"
+	"sync"
+	"time"
+)
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -161,6 +163,7 @@ func (cfg *config) ShutdownServer(gi int, i int) {
 		name := gg.endnames[i][j]
 		cfg.net.Enable(name, false)
 	}
+
 	for j := 0; j < len(gg.mendnames[i]); j++ {
 		name := gg.mendnames[i][j]
 		cfg.net.Enable(name, false)
@@ -189,10 +192,12 @@ func (cfg *config) ShutdownServer(gi int, i int) {
 		cfg.mu.Lock()
 		gg.servers[i] = nil
 	}
+
 }
 
 func (cfg *config) ShutdownGroup(gi int) {
 	for i := 0; i < cfg.n; i++ {
+		fmt.Printf("DEBUG : shutdownServer %v th server in group %v\n", i, gi)
 		cfg.ShutdownServer(gi, i)
 	}
 }
