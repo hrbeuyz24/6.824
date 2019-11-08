@@ -14,6 +14,10 @@ const (
 	ErrNoKey      = "ErrNoKey"
 	ErrWrongGroup = "ErrWrongGroup"
 	ErrOldCommand = "ErrOldCommand"
+	ErrWaitData   = "ErrWaitData"
+	ErrWrongNum   = "ErrWrongNum"
+	ErrTimeOut    = "ErrTimeOut"
+	ErrNotLeader  = "ErrNotLeader"
 )
 
 type Err string
@@ -30,6 +34,8 @@ type PutAppendArgs struct {
 	Cid     int64
 	QueryID int
 	Shard   int
+	Num     int
+	ID      int
 }
 
 type PutAppendReply struct {
@@ -43,6 +49,7 @@ type GetArgs struct {
 	Cid     int64
 	QueryID int
 	Shard   int
+	Num     int
 }
 
 type GetReply struct {
@@ -55,4 +62,28 @@ type CommonReply struct {
 	Err     Err
 	Value   string
 	Success bool
+}
+
+type RequestDBInfoArgs struct {
+	Num   int
+	Shard int
+	Data  map[string]string
+	Rc    map[int64]int
+}
+
+type RequestDBInfoReply struct {
+	Err Err
+}
+
+type kvData struct {
+	Gid   int
+	Num   int
+	Shard int
+	//Data    map[string]string
+	Servers []string
+}
+
+type UpdateNum struct {
+	Shard int
+	Num   int
 }

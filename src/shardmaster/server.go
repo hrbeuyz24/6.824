@@ -100,14 +100,14 @@ func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
 	select {
 	case r := <-replyCh:
 		if !r.Success {
-			reply.Err = "error : " + r.Err
+			reply.Err = r.Err
 			sm.logger(fmt.Sprintf("Join request(%v) return error : %v", queryName, reply.Err))
 			return
 		} else {
 			sm.logger(fmt.Sprintf("Join request(%v) return success", queryName))
 			return
 		}
-	case <-time.After(400 * time.Millisecond):
+	case <-time.After(800 * time.Millisecond):
 		reply.Err = "time out"
 		return
 	}
@@ -143,14 +143,14 @@ func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
 	select {
 	case r := <-replyCh:
 		if !r.Success {
-			reply.Err = "error : " + r.Err
+			reply.Err = r.Err
 			sm.logger(fmt.Sprintf("Leave request(%v) return error : %v", queryName, reply.Err))
 			return
 		} else {
 			sm.logger(fmt.Sprintf("Leave request(%v) return success", queryName))
 			return
 		}
-	case <-time.After(400 * time.Millisecond):
+	case <-time.After(800 * time.Millisecond):
 		reply.Err = "time out"
 		return
 	}
@@ -186,14 +186,14 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 	select {
 	case r := <-replyCh:
 		if !r.Success {
-			reply.Err = "error : " + r.Err
+			reply.Err = r.Err
 			sm.logger(fmt.Sprintf("Leave request(%v) return error : %v", queryName, reply.Err))
 			return
 		} else {
 			sm.logger(fmt.Sprintf("Leave request(%v) return success", queryName))
 			return
 		}
-	case <-time.After(400 * time.Millisecond):
+	case <-time.After(800 * time.Millisecond):
 		reply.Err = "time out"
 		return
 	}
@@ -212,14 +212,14 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	reply.Err = ""
 
 	queryName := sm.getQueryName(args.Cid, args.QueryID)
-	sm.logger(fmt.Sprintf("recieves Query request(%v), query %v config", queryName, args.Num))
+	//sm.logger(fmt.Sprintf("recieves Query request(%v), query %v config", queryName, args.Num))
 
 	replyCh := sm.getReplyCh(queryName, true)
 	defer sm.del(queryName)
 
 	_, _, isLeader := sm.rf.Start(op)
 	if !isLeader {
-		sm.logger(fmt.Sprintf("Query request(%v), server is not the leader", queryName))
+		//sm.logger(fmt.Sprintf("Query request(%v), server is not the leader", queryName))
 		reply.WrongLeader = true
 		reply.Err = "not a leader"
 		return
@@ -228,18 +228,19 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	select {
 	case r := <-replyCh:
 		if !r.Success {
-			reply.Err = "error : " + r.Err
-			sm.logger(fmt.Sprintf("Query request(%v) return error : %v", queryName, reply.Err))
+			reply.Err = r.Err
+			//sm.logger(fmt.Sprintf("Query request(%v) return error : %v", queryName, reply.Err))
 			return
 		} else {
 			reply.Config = *(r.Config)
-			sm.logger(fmt.Sprintf("Query request(%v) return success", queryName))
+			//sm.logger(fmt.Sprintf("Query request(%v) return success", queryName))
 			// if args.Num != reply.Config.Num {
 			// 	panic("query return wrong config")
 			// }
 			return
 		}
-	case <-time.After(400 * time.Millisecond):
+	case <-time.After(800 * time.Millisecond):
+		sm.logger("query new config time out")
 		reply.Err = "time out"
 		return
 	}
@@ -368,7 +369,7 @@ func (sm *ShardMaster) working() {
 			var config *Config = nil
 
 			queryName := sm.getQueryName(op.Cid, op.QueryID)
-			sm.logger(fmt.Sprintf("try to commit query(%v)", queryName))
+			//sm.logger(fmt.Sprintf("try to commit query(%v)", queryName))
 
 			queryID, ok := sm.commandRecord[op.Cid]
 			if !ok || queryID < op.QueryID {
@@ -414,11 +415,15 @@ func (sm *ShardMaster) working() {
 			sm.mu.Lock()
 			replyCh, ok := sm.replyCh[queryName]
 			if ok && replyCh != nil {
-				replyCh <- CommonReply{
+				select {
+				case replyCh <- CommonReply{
 					Success: success,
 					Err:     err,
 					Config:  config,
+				}:
+				case <-time.After(800 * time.Millisecond):
 				}
+
 			}
 			sm.mu.Unlock()
 		}

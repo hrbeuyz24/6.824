@@ -7,3 +7,12 @@
   - 某个leader被隔离一段时间后，重新加入网络，刚加入时还处于leader状态，还会发送heartbeat包，可能发送的heartbeart包的term是最大的，但是日志是旧的，所以接受heartbeat时也需要判断日志是否过期，如何判断（未解决）
   - 开始做快照操作后，将kv map中的数据保存下来，但此时raft server apply了新的日志，快照操作继续完成，将日志截断到最新的apply index，这样，最新apply的日志既没有保存在kv map中，在raft也被截断，需要将kv map的数据保存和截断日志操作同步起来,在保存kv map时加kv.mu，防止在被修改，同时raft在截断日志时再开一个go，为了让之前的kv server释放锁，如果既有kv server的锁，也有raft 的锁会产生死锁。(lab3B)
   - golang map 用原生range遍历不能保证顺序输出!
+  - chan如果不make，在读或写时会阻塞但不会报错.
+  - 当删除某个group的server时，此时正有goroutine在向shardmaster请求config，但是已经退出了网络，所以shardmaster的client无限阻塞，导致该group的server无法kill，目前的解决方法是shardmaster的client在连续请求config不成功后就return不再无限请求。（lab4B）
+  - 做快照时，shardkv当前的config也需要持久化，在commit时，需要看当前的config。
+  - 参考是怎么实现shardkv的kill函数的(lab4b)。
+  - 当前还存在的问题，rpc请求在超时后会死锁（未解决），只能把超时时间设置的稍微长一点。
+  - 还没发送待发送数据的时候，可能已经又收到了来自其他分片的该数据，当发送的时候，会返回old command 并删除这些数据，这些数据本来不应该被删除，在删除时，可以判断当前该数据的num，如果大于刚才发送的num，说明数据已经转了一圈回来了，不需要删除。
+  - **rpc request fail也会发生调用！**
+  - 不同的操作顺序会造成不同的结果，对于这种操作要使用rf.Start()，不要在自己的服务器单独操作数据。
+  - 过期的请求返回错误，client收到过期请求的错误返回后，不再请求。

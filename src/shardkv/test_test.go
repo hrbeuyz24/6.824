@@ -14,7 +14,9 @@ import (
 const linearizabilityCheckTimeout = 1 * time.Second
 
 func check(t *testing.T, ck *Clerk, key string, value string) {
+	fmt.Printf("DEBUG : try to get key : %v\n", key)
 	v := ck.Get(key)
+	fmt.Printf("DEBUG : get %v key, value : %v\n", key, v)
 	if v != value {
 		t.Fatalf("Get(%v): expected:\n%v\nreceived:\n%v", key, value, v)
 	}
@@ -44,10 +46,16 @@ func TestStaticShards(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(20)
+		fmt.Printf("DEBUG : try to put %v, key : %v, value : %v\n", i, ka[i], va[i])
 		ck.Put(ka[i], va[i])
 	}
+	fmt.Printf("DEBUG : finish put\n")
+	fmt.Printf("DEBUG : n : %v\n", n)
 	for i := 0; i < n; i++ {
+
+		fmt.Printf("DEBUG : start %v check\n", i)
 		check(t, ck, ka[i], va[i])
+		fmt.Printf("DEBUG : finish %v check\n", i)
 	}
 
 	fmt.Printf("DEBUG : finish check1\n")
@@ -129,6 +137,7 @@ func TestJoinLeave(t *testing.T) {
 
 	fmt.Printf("DEBUG : leave 0\n")
 	cfg.leave(0)
+	fmt.Printf("DEBUG : finish leave 0\n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -158,7 +167,9 @@ func TestSnapshot(t *testing.T) {
 
 	ck := cfg.makeClient()
 
+	fmt.Printf("DEBUG : join 0\n")
 	cfg.join(0)
+	fmt.Printf("DEBUG : finish join 0\n")
 
 	n := 30
 	ka := make([]string, n)
@@ -172,9 +183,13 @@ func TestSnapshot(t *testing.T) {
 		check(t, ck, ka[i], va[i])
 	}
 
+	fmt.Printf("DEBUG : join 1\n")
 	cfg.join(1)
+	fmt.Printf("DEBUG : finish join 1, join 2\n")
 	cfg.join(2)
+	fmt.Printf("DEBUG : finish join 2, leave 0\n")
 	cfg.leave(0)
+	fmt.Printf("DEBUG : finish 0\n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -182,9 +197,11 @@ func TestSnapshot(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
-
+	fmt.Printf("DEBUG : leave 1\n")
 	cfg.leave(1)
+	fmt.Printf("DEBUG : finish leave 1, join 1\n")
 	cfg.join(0)
+	fmt.Printf("DEBUG : finish join 0\n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -203,12 +220,18 @@ func TestSnapshot(t *testing.T) {
 
 	cfg.checklogs()
 
+	fmt.Printf("DEBUG : shut down group 0\n")
 	cfg.ShutdownGroup(0)
+	fmt.Printf("DEBUG : shut down group 1\n")
 	cfg.ShutdownGroup(1)
+	fmt.Printf("DEBUG : shut down group 2\n")
 	cfg.ShutdownGroup(2)
 
+	fmt.Printf("DEBUG : start group 0\n")
 	cfg.StartGroup(0)
+	fmt.Printf("DEBUG : start group 1\n")
 	cfg.StartGroup(1)
+	fmt.Printf("DEBUG : start group 2\n")
 	cfg.StartGroup(2)
 
 	for i := 0; i < n; i++ {
@@ -239,16 +262,23 @@ func TestMissChange(t *testing.T) {
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
-
+	fmt.Printf("DEBUG : 1\n")
 	cfg.join(1)
+	fmt.Printf("DEBUG : 2\n")
 
 	cfg.ShutdownServer(0, 0)
+	fmt.Printf("DEBUG : 3\n")
 	cfg.ShutdownServer(1, 0)
+	fmt.Printf("DEBUG : 4\n")
 	cfg.ShutdownServer(2, 0)
+	fmt.Printf("DEBUG : 5\n")
 
 	cfg.join(2)
+	fmt.Printf("DEBUG : 6\n")
 	cfg.leave(1)
+	fmt.Printf("DEBUG : 7\n")
 	cfg.leave(0)
+	fmt.Printf("DEBUG : 8\n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -256,9 +286,9 @@ func TestMissChange(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
-
+	fmt.Printf("DEBUG : 9\n")
 	cfg.join(1)
-
+	fmt.Printf("DEBUG : 10\n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -266,25 +296,35 @@ func TestMissChange(t *testing.T) {
 		va[i] += x
 	}
 
+	fmt.Printf("DEBUG : 11\n")
 	cfg.StartServer(0, 0)
+	fmt.Printf("DEBUG : 12\n")
 	cfg.StartServer(1, 0)
+	fmt.Printf("DEBUG : 13\n")
 	cfg.StartServer(2, 0)
 
+	fmt.Printf("DEBUG : 14\n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+	fmt.Printf("DEBUG : 15\n")
 
 	time.Sleep(2 * time.Second)
 
 	cfg.ShutdownServer(0, 1)
+	fmt.Printf("DEBUG : 16\n")
 	cfg.ShutdownServer(1, 1)
+	fmt.Printf("DEBUG : 17\n")
 	cfg.ShutdownServer(2, 1)
+	fmt.Printf("DEBUG : 18\n")
 
 	cfg.join(0)
+	fmt.Printf("DEBUG : 19\n")
 	cfg.leave(2)
+	fmt.Printf("DEBUG : 20\n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -293,9 +333,13 @@ func TestMissChange(t *testing.T) {
 		va[i] += x
 	}
 
+	fmt.Printf("DEBUG : 21\n")
 	cfg.StartServer(0, 1)
+	fmt.Printf("DEBUG : 22\n")
 	cfg.StartServer(1, 1)
+	fmt.Printf("DEBUG : 23\n")
 	cfg.StartServer(2, 1)
+	fmt.Printf("DEBUG : 24\n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -311,8 +355,9 @@ func TestConcurrent1(t *testing.T) {
 	defer cfg.cleanup()
 
 	ck := cfg.makeClient()
-
+	fmt.Printf("DEBUG step : 1\n")
 	cfg.join(0)
+	fmt.Printf("DEBUG setp : 2\n")
 
 	n := 10
 	ka := make([]string, n)
@@ -323,6 +368,7 @@ func TestConcurrent1(t *testing.T) {
 		ck.Put(ka[i], va[i])
 	}
 
+	fmt.Printf("DEBUG setp : 3\n")
 	var done int32
 	ch := make(chan bool)
 
@@ -340,32 +386,46 @@ func TestConcurrent1(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go ff(i)
 	}
+	fmt.Printf("DEBUG setp : 4\n")
 
 	time.Sleep(150 * time.Millisecond)
 	cfg.join(1)
+	fmt.Printf("DEBUG setp : 5\n")
 	time.Sleep(500 * time.Millisecond)
 	cfg.join(2)
+	fmt.Printf("DEBUG setp : 6\n")
 	time.Sleep(500 * time.Millisecond)
 	cfg.leave(0)
+	fmt.Printf("DEBUG setp : 7\n")
 
 	cfg.ShutdownGroup(0)
 	time.Sleep(100 * time.Millisecond)
+	fmt.Printf("DEBUG setp : 8\n")
 	cfg.ShutdownGroup(1)
 	time.Sleep(100 * time.Millisecond)
+	fmt.Printf("DEBUG setp : 9\n")
 	cfg.ShutdownGroup(2)
+	fmt.Printf("DEBUG setp : 10\n")
 
 	cfg.leave(2)
+	fmt.Printf("DEBUG setp : 11\n")
 
 	time.Sleep(100 * time.Millisecond)
 	cfg.StartGroup(0)
+	fmt.Printf("DEBUG setp : 12\n")
 	cfg.StartGroup(1)
+	fmt.Printf("DEBUG setp : 13\n")
 	cfg.StartGroup(2)
+	fmt.Printf("DEBUG setp : 14\n")
 
 	time.Sleep(100 * time.Millisecond)
 	cfg.join(0)
+	fmt.Printf("DEBUG setp : 15\n")
 	cfg.leave(1)
+	fmt.Printf("DEBUG setp : 16\n")
 	time.Sleep(500 * time.Millisecond)
 	cfg.join(1)
+	fmt.Printf("DEBUG setp : 17\n")
 
 	time.Sleep(1 * time.Second)
 
@@ -374,6 +434,7 @@ func TestConcurrent1(t *testing.T) {
 		<-ch
 	}
 
+	fmt.Printf("DEBUG setp : 18\n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
@@ -463,7 +524,7 @@ func TestUnreliable1(t *testing.T) {
 	defer cfg.cleanup()
 
 	ck := cfg.makeClient()
-
+	fmt.Printf("DEBUG step : 1\n")
 	cfg.join(0)
 
 	n := 10
@@ -472,6 +533,7 @@ func TestUnreliable1(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(5)
+		fmt.Printf("DEBUG 11, %v put\n", i)
 		ck.Put(ka[i], va[i])
 	}
 
@@ -479,17 +541,21 @@ func TestUnreliable1(t *testing.T) {
 	cfg.join(2)
 	cfg.leave(0)
 
+	fmt.Printf("DEBUG step : 2\n")
 	for ii := 0; ii < n*2; ii++ {
+		fmt.Printf("DEBUG 22, %v put\n", ii)
 		i := ii % n
 		check(t, ck, ka[i], va[i])
 		x := randstring(5)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+	fmt.Printf("DEBUG step : 3\n")
 
 	cfg.join(0)
 	cfg.leave(1)
 
+	fmt.Printf("DEBUG step : 4\n")
 	for ii := 0; ii < n*2; ii++ {
 		i := ii % n
 		check(t, ck, ka[i], va[i])
@@ -508,6 +574,7 @@ func TestUnreliable2(t *testing.T) {
 
 	cfg.join(0)
 
+	fmt.Printf("DEBUG step : 1\n")
 	n := 10
 	ka := make([]string, n)
 	va := make([]string, n)
@@ -516,6 +583,7 @@ func TestUnreliable2(t *testing.T) {
 		va[i] = randstring(5)
 		ck.Put(ka[i], va[i])
 	}
+	fmt.Printf("DEBUG step : 2\n")
 
 	var done int32
 	ch := make(chan bool)
@@ -534,6 +602,8 @@ func TestUnreliable2(t *testing.T) {
 		go ff(i)
 	}
 
+	fmt.Printf("DEBUG step : 3\n")
+
 	time.Sleep(150 * time.Millisecond)
 	cfg.join(1)
 	time.Sleep(500 * time.Millisecond)
@@ -545,6 +615,7 @@ func TestUnreliable2(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	cfg.join(1)
 	cfg.join(0)
+	fmt.Printf("DEBUG step : 4\n")
 
 	time.Sleep(2 * time.Second)
 
@@ -553,6 +624,7 @@ func TestUnreliable2(t *testing.T) {
 	for i := 0; i < n; i++ {
 		<-ch
 	}
+	fmt.Printf("DEBUG step : 5\n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
